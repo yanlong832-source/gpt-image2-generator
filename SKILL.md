@@ -1,13 +1,13 @@
 ---
 name: gpt-image2-generator
-description: 通过 OpenAI 兼容网关的 /v1/images/generations 接口生成 gpt-image-2 图片。当用户要求生成图片、画图、出图，或提到 gpt-image-2、images API 时使用。服务地址与密钥从环境变量或配置文件读取，绝不硬编码或明文输出。
+description: 通过 OpenAI 兼容网关的 /v1/images/generations 与 /v1/images/edits 接口生成、编辑 gpt-image-2 图片，并支持多图拼合。当用户要求生成图片、画图、出图、编辑图片，或提到 gpt-image-2、images API 时使用。服务地址与密钥从环境变量或配置文件读取，绝不硬编码或明文输出。
 ---
 
-# gpt-image-2 图片生成
+# gpt-image-2 图片生成与编辑
 
 ## 用途
 
-调用 OpenAI 兼容网关（如 sub2api 等自建网关）的 `/v1/images/generations` 接口，使用 gpt-image-2 模型生成图片。
+调用 OpenAI 兼容网关（如 sub2api 等自建网关）的 `/v1/images/generations`（生成）与 `/v1/images/edits`（编辑）接口，使用 gpt-image-2 模型处理图片。
 适用于 Codex 等固定使用 `/v1/responses` 协议的客户端无法生图时，改用 images API 直连出图。
 
 ## 配置（安全要求）
@@ -34,29 +34,52 @@ GPT_IMAGE_API_KEY=sk-xxxx
 
 ## 使用
 
+### 1. 生成图片
+
 ```bash
 python scripts/generate_image.py --prompt "一只戴帽子的橘猫，油画风格"
 
 python scripts/generate_image.py --prompt "赛博朋克城市夜景" --size 1024x1536 --output 城市.png
-
-python scripts/generate_image.py --prompt "..." --quality high --n 2 --output 多张
 ```
 
-参数说明：
+### 2. 编辑图片（/v1/images/edits）
+
+```bash
+# 编辑本地图片（自动转为 data URL 上传）
+python scripts/generate_image.py --edit 原图.png --prompt "把天空改成黄昏色" --output 编辑后.png
+
+# 编辑网络图片（直接传 URL）
+python scripts/generate_image.py --edit https://example.com/photo.jpg --prompt "加上一只猫"
+
+# 带蒙版编辑（只修改蒙版区域）
+python scripts/generate_image.py --edit 原图.png --mask 蒙版.png --prompt "只把背景换成海滩"
+```
+
+### 3. 多图拼合（网格）
+
+```bash
+# 生成 4 张后自动拼成 2x2 网格（需要 pip install pillow）
+python scripts/generate_image.py --prompt "同一只猫的四个表情" --n 4 --composite --output 表情包
+```
+
+## 参数说明
 
 | 参数 | 说明 |
 |---|---|
-| `--prompt` | 必填，图片描述 |
+| `--prompt` | 必填，图片描述或编辑要求 |
 | `--model` | 默认 `gpt-image-2` |
 | `--size` | 默认 `1024x1024`，可选 `1024x1536`、`1536x1024`、`auto`（以网关支持为准） |
-| `--quality` | 可选，如 `low` / `medium` / `high`（透传） |
-| `--n` | 可选，生成张数（透传，默认 1） |
+| `--quality` | 可选，如 `low` / `medium` / `high`（仅生成模式，透传） |
+| `--n` | 可选，生成张数（默认 1） |
 | `--output` | 输出路径；多张时作为文件名前缀（如 `多张_1.png`） |
+| `--edit` | 进入编辑模式；值为本地图片路径或图片 URL |
+| `--mask` | 编辑蒙版：本地路径或 URL（配合 `--edit`，可选） |
+| `--composite` | 生成多张后拼成一张网格图（需 `pip install pillow`） |
 
 ## 工作流
 
 1. 确认配置存在（环境变量或配置文件）；缺失时引导用户配置，不代填密钥
-2. 运行脚本生成图片
+2. 按需求选择生成 / 编辑模式运行脚本
 3. 校验输出文件存在且非空
 4. 告知用户图片保存路径
 
@@ -65,9 +88,9 @@ python scripts/generate_image.py --prompt "..." --quality high --n 2 --output �
 | 状态码 | 含义 | 处理 |
 |---|---|---|
 | 401 | API Key 无效 | 检查密钥是否正确 |
-| 403 | 该 Key 所在分组未开启图片生成权限 | 在网关后台为分组开启图片权限 |
-| 400 | 参数不被支持 | 检查 model / size 是否被网关支持 |
-| 502 | 上游网关错误 | 网关不可达，或上游不支持该接口 |
+| 403 | 该 Key 所在分组未开启图片生成/编辑权限 | 在网关后台为分组开启图片权限 |
+| 400 | 参数不被支持 | 检查 model / size / 图片格式等 |
+| 502 | 上游网关错误 | 网关不可达，或上游不支持该接口（如上游仅支持 curl 类客户端） |
 | 网络错误 | 连接失败 | 检查网络能否到达网关地址 |
 
 ## 安装到 Codex（可选）
@@ -82,4 +105,7 @@ cp -r gpt-image2-generator ~/.codex/skills/
 
 ## 脚本说明
 
-`scripts/generate_image.py` 仅使用 Python 标准库（urllib / base64 / json），无需安装任何依赖。base_url 自动兼容三种写法：`https://host/`、`https://host/v1`、`https://host/v1/images/generations`。
+`scripts/generate_image.py` 主体仅使用 Python 标准库；`--composite` 需要可选依赖 Pillow（`pip install pillow`）。
+- 生成：`POST /v1/images/generations`（JSON：model / prompt / size / n / quality）
+- 编辑：`POST /v1/images/edits`（JSON：model / prompt / images[].image_url，本地文件自动转 data URL；蒙版为 images[].mask_url）
+- base_url 自动兼容三种写法：`https://host/`、`https://host/v1`、`https://host/v1/images/generations`
