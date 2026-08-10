@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 
 CONFIG_FILE = os.path.expanduser("~/.gpt-image2/config.json")
+CONFIG_TEMPLATE = {"base_url": "", "api_key": ""}
 
 try:
     from PIL import Image  # 仅 --composite 需要（pip install pillow）
@@ -32,6 +33,7 @@ def load_config():
     """返回 (base_url, api_key)，未找到配置时退出"""
     base_url = os.environ.get("GPT_IMAGE_API_BASE_URL", "").strip()
     api_key = os.environ.get("GPT_IMAGE_API_KEY", "").strip()
+    config_created = False
     if not base_url or not api_key:
         cfg = {}
         if os.path.exists(CONFIG_FILE):
@@ -40,14 +42,32 @@ def load_config():
                     cfg = json.load(f)
             except Exception:
                 print(f"警告：配置文件 {CONFIG_FILE} 解析失败，将忽略")
+        else:
+            config_dir = os.path.dirname(CONFIG_FILE)
+            try:
+                if config_dir:
+                    os.makedirs(config_dir, exist_ok=True)
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+                try:
+                    os.chmod(CONFIG_FILE, 0o600)
+                except OSError:
+                    pass
+                config_created = True
+            except OSError as error:
+                print(f"警告：无法创建配置模板 {CONFIG_FILE}（{error}）")
         if not base_url:
             base_url = str(cfg.get("base_url", "")).strip()
         if not api_key:
             api_key = str(cfg.get("api_key", "")).strip()
     if not base_url or not api_key:
-        print("错误：未找到 API 配置。请二选一：")
+        if config_created:
+            print(f"首次使用：已创建配置模板 {CONFIG_FILE}")
+            print('请填入 "base_url" 和 "api_key" 后重新运行。')
+        print("错误：未找到完整 API 配置。请二选一：")
         print("  1) 设置环境变量 GPT_IMAGE_API_BASE_URL 与 GPT_IMAGE_API_KEY")
-        print(f"  2) 创建配置文件 {CONFIG_FILE}，内容：")
+        print(f"  2) 填写配置文件 {CONFIG_FILE}，内容：")
         print('     {"base_url": "https://你的网关地址", "api_key": "sk-xxxx"}')
         sys.exit(2)
     return base_url.rstrip("/"), api_key
@@ -114,6 +134,9 @@ def api_post(endpoint, payload, api_key, base_url):
 def save_images(items, output):
     """保存图片数据（b64_json 或 url），返回保存路径列表"""
     output = output or f"gpt_image_{int(time.time())}"
+    output_stem, output_extension = os.path.splitext(output)
+    if output_extension.lower() == ".png":
+        output = output_stem
     multi = len(items) > 1
     saved = []
     for i, item in enumerate(items):
@@ -129,6 +152,15 @@ def save_images(items, output):
             sys.exit(1)
         saved.append(path)
     return saved
+
+
+def preview_markdown(paths):
+    """返回可在支持 Markdown 的客户端中显示的本地预览链接。"""
+    previews = []
+    for index, path in enumerate(paths, start=1):
+        absolute_path = os.path.abspath(path).replace(os.sep, "/")
+        previews.append(f"![生成图片 {index}]({absolute_path})")
+    return "\n".join(previews)
 
 
 def composite_images(paths, output):
@@ -175,6 +207,8 @@ def main():
                     help="编辑蒙版：本地图片路径或图片 URL（配合 --edit，可选）")
     ap.add_argument("--composite", action="store_true",
                     help="把本次生成的多个结果拼成一张网格图（需 pip install pillow）")
+    ap.add_argument("--preview", action="store_true",
+                    help="输出每张图片的 Markdown 本地预览链接")
     args = ap.parse_args()
 
     base_url, api_key = load_config()
@@ -216,6 +250,9 @@ def main():
             print(f"警告：{p} 文件为空")
         else:
             print(f"已生成：{p}（{size} 字节）")
+    if args.preview:
+        print("预览（支持 Markdown 的客户端可直接显示）：")
+        print(preview_markdown(saved))
 
 
 if __name__ == "__main__":
