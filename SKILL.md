@@ -21,7 +21,7 @@ GPT_IMAGE_API_BASE_URL=https://你的网关地址
 GPT_IMAGE_API_KEY=sk-xxxx
 ```
 
-**方式 B：配置文件** `~/.gpt-image2/config.json`
+**方式 B：自动配置文件** `~/.gpt-image2/config.json`
 
 ```json
 {
@@ -30,6 +30,8 @@ GPT_IMAGE_API_KEY=sk-xxxx
 }
 ```
 
+首次运行时，若环境变量和配置都不完整，脚本会自动创建空模板 `~/.gpt-image2/config.json` 并显示实际路径。提示用户只在该文件中填入 `base_url` 和 `api_key` 后重试；不要由 Codex 代填或在回复中复述密钥。
+
 > 安全铁律：任何情况下不得在代码、日志、回复中输出或硬编码 base_url 与 api_key 明文。若用户粘贴了密钥，先引导写入配置文件（权限设为仅本人可读）或环境变量，再使用。
 
 ## 使用
@@ -37,9 +39,9 @@ GPT_IMAGE_API_KEY=sk-xxxx
 ### 1. 生成图片
 
 ```bash
-python scripts/generate_image.py --prompt "一只戴帽子的橘猫，油画风格"
+python scripts/generate_image.py --prompt "一只戴帽子的橘猫，油画风格" --preview
 
-python scripts/generate_image.py --prompt "赛博朋克城市夜景" --size 1024x1536 --output 城市.png
+python scripts/generate_image.py --prompt "赛博朋克城市夜景" --size 1024x1536 --output 城市.png --preview
 ```
 
 ### 2. 编辑图片（/v1/images/edits）
@@ -71,17 +73,18 @@ python scripts/generate_image.py --prompt "同一只猫的四个表情" --n 4 --
 | `--size` | 默认 `1024x1024`，可选 `1024x1536`、`1536x1024`、`auto`（以网关支持为准） |
 | `--quality` | 可选，如 `low` / `medium` / `high`（仅生成模式，透传） |
 | `--n` | 可选，生成张数（默认 1） |
-| `--output` | 输出路径；多张时作为文件名前缀（如 `多张_1.png`） |
+| `--output` | 输出路径；多张时作为文件名前缀（如 `多张_1.png`）；传入 `.png` 不会重复追加扩展名 |
 | `--edit` | 进入编辑模式；值为本地图片路径或图片 URL |
 | `--mask` | 编辑蒙版：本地路径或 URL（配合 `--edit`，可选） |
 | `--composite` | 生成多张后拼成一张网格图（需 `pip install pillow`） |
+| `--preview` | 输出每张结果的绝对路径 Markdown 预览链接 |
 
 ## 工作流
 
-1. 确认配置存在（环境变量或配置文件）；缺失时引导用户配置，不代填密钥
+1. 带 `--preview` 运行脚本；缺失配置时，告知用户脚本已经创建的 `~/.gpt-image2/config.json` 路径，并提醒填写 `base_url` 与 `api_key`，不代填密钥
 2. 按需求选择生成 / 编辑模式运行脚本
 3. 校验输出文件存在且非空
-4. 告知用户图片保存路径
+4. 使用可用的本地图片预览工具检查结果，并在回复中以绝对路径 Markdown 图片链接展示预览；不要只给出文件路径
 
 ## 常见错误对照
 
