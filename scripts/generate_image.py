@@ -5,6 +5,7 @@
 支持三个功能：
 1. 生成图片   --prompt "描述" [--n 4] [--composite]
 2. 编辑图片   --edit 图片路径/URL --prompt "编辑要求" [--mask 蒙版]
+               [--edit-transport json|multipart]
 3. 多图拼合   --n 4 --composite（生成后拼成网格）
 
 配置来源（优先级）：环境变量 GPT_IMAGE_API_BASE_URL / GPT_IMAGE_API_KEY
@@ -14,7 +15,9 @@ import argparse
 import base64
 import json
 import math
+import mimetypes
 import os
+import secrets
 import sys
 import time
 import urllib.error
@@ -93,14 +96,51 @@ def make_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def api_post(endpoint, payload, api_key, base_url):
-    """POST JSON 并返回响应 dict；失败时打印中文提示并退出"""
-    req = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
-        method="POST",
-    )
+def escape_multipart_header(value):
+    """转义 multipart 头部中的引号和换行，避免非法头部注入。"""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
+
+
+def build_multipart_body(fields, files, boundary=None):
+    """编码标准 multipart/form-data 请求体，files 为 (字段名, 本地文件路径)。"""
+    boundary = boundary or f"----gptimage2{secrets.token_hex(16)}"
+    chunks = []
+    boundary_bytes = boundary.encode("ascii")
+
+    for name, value in fields.items():
+        if value is None:
+            continue
+        chunks.extend((
+            b"--" + boundary_bytes + b"\r\n",
+            (
+                f'Content-Disposition: form-data; name="{escape_multipart_header(name)}"\r\n\r\n'
+            ).encode("utf-8"),
+            str(value).encode("utf-8"),
+            b"\r\n",
+        ))
+
+    for name, path in files:
+        filename = escape_multipart_header(os.path.basename(path))
+        content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as source:
+            contents = source.read()
+        chunks.extend((
+            b"--" + boundary_bytes + b"\r\n",
+            (
+                "Content-Disposition: form-data; "
+                f'name="{escape_multipart_header(name)}"; filename="{filename}"\r\n'
+            ).encode("utf-8"),
+            f"Content-Type: {content_type}\r\n\r\n".encode("ascii"),
+            contents,
+            b"\r\n",
+        ))
+
+    chunks.append(b"--" + boundary_bytes + b"--\r\n")
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def api_request(req, base_url):
+    """发送请求并返回响应 dict；失败时打印中文提示并退出。"""
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -129,6 +169,40 @@ def api_post(endpoint, payload, api_key, base_url):
     except Exception as e:
         print(f"错误：{e}")
         sys.exit(1)
+
+
+def api_post(endpoint, payload, api_key, base_url):
+    """POST JSON 并返回响应 dict。"""
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    return api_request(req, base_url)
+
+
+def api_multipart_post(endpoint, fields, files, api_key, base_url):
+    """使用 multipart/form-data 上传本地编辑图片并返回响应 dict。"""
+    body, content_type = build_multipart_body(fields, files)
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": content_type},
+        method="POST",
+    )
+    return api_request(req, base_url)
+
+
+def require_local_file(path, option_name):
+    """multipart 模式只允许本地文件，避免将 URL 误当成文件上传。"""
+    if os.path.isfile(path):
+        return path
+    print(
+        f"错误：{option_name} 在 multipart 模式下必须是存在的本地图片文件；"
+        "图片 URL 请使用 --edit-transport json。"
+    )
+    sys.exit(2)
 
 
 def save_images(items, output):
@@ -202,9 +276,11 @@ def main():
     ap.add_argument("--quality", default=None, help="质量：low/medium/high（可选）")
     ap.add_argument("--n", type=int, default=None, help="生成张数（可选，默认 1）")
     ap.add_argument("--edit", default=None,
-                    help="编辑模式：本地图片路径（自动转 data URL）或图片 URL")
+                    help="编辑模式：本地图片路径（自动转 data URL）或图片 URL；multipart 仅支持本地文件")
     ap.add_argument("--mask", default=None,
                     help="编辑蒙版：本地图片路径或图片 URL（配合 --edit，可选）")
+    ap.add_argument("--edit-transport", choices=("json", "multipart"), default="json",
+                    help="编辑请求格式：json（默认，images[].image_url）或 multipart（image 文件上传）")
     ap.add_argument("--composite", action="store_true",
                     help="把本次生成的多个结果拼成一张网格图（需 pip install pillow）")
     ap.add_argument("--preview", action="store_true",
@@ -216,14 +292,24 @@ def main():
     if args.edit:
         # ---- 图片编辑模式：POST /v1/images/edits ----
         endpoint = build_endpoint(base_url, "edits")
-        images = [{"image_url": make_data_url(args.edit)}]
-        if args.mask:
-            images[0]["mask_url"] = make_data_url(args.mask)
-        payload = {"model": args.model, "prompt": args.prompt, "images": images,
-                   "n": args.n if args.n else 1}
-        if args.size:
-            payload["size"] = args.size
-        data = api_post(endpoint, payload, api_key, base_url)
+        if args.edit_transport == "multipart":
+            fields = {"model": args.model, "prompt": args.prompt,
+                      "n": args.n if args.n else 1}
+            if args.size:
+                fields["size"] = args.size
+            files = [("image", require_local_file(args.edit, "--edit"))]
+            if args.mask:
+                files.append(("mask", require_local_file(args.mask, "--mask")))
+            data = api_multipart_post(endpoint, fields, files, api_key, base_url)
+        else:
+            images = [{"image_url": make_data_url(args.edit)}]
+            if args.mask:
+                images[0]["mask_url"] = make_data_url(args.mask)
+            payload = {"model": args.model, "prompt": args.prompt, "images": images,
+                       "n": args.n if args.n else 1}
+            if args.size:
+                payload["size"] = args.size
+            data = api_post(endpoint, payload, api_key, base_url)
     else:
         # ---- 图片生成模式：POST /v1/images/generations ----
         endpoint = build_endpoint(base_url, "generations")

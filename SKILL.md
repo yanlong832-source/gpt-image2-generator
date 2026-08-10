@@ -55,6 +55,10 @@ python scripts/generate_image.py --edit https://example.com/photo.jpg --prompt "
 
 # 带蒙版编辑（只修改蒙版区域）
 python scripts/generate_image.py --edit 原图.png --mask 蒙版.png --prompt "只把背景换成海滩"
+
+# 若网关只接受 multipart/form-data，则上传 image / mask 文件字段
+# multipart 模式仅接受本地文件；图片 URL 请继续使用默认 json 模式
+python scripts/generate_image.py --edit 原图.png --mask 蒙版.png --edit-transport multipart --prompt "只把背景换成海滩" --preview
 ```
 
 ### 3. 多图拼合（网格）
@@ -76,13 +80,14 @@ python scripts/generate_image.py --prompt "同一只猫的四个表情" --n 4 --
 | `--output` | 输出路径；多张时作为文件名前缀（如 `多张_1.png`）；传入 `.png` 不会重复追加扩展名 |
 | `--edit` | 进入编辑模式；值为本地图片路径或图片 URL |
 | `--mask` | 编辑蒙版：本地路径或 URL（配合 `--edit`，可选） |
+| `--edit-transport` | 编辑请求格式：`json`（默认，`images[].image_url`）或 `multipart`（`image` / `mask` 文件上传；仅本地文件） |
 | `--composite` | 生成多张后拼成一张网格图（需 `pip install pillow`） |
 | `--preview` | 输出每张结果的绝对路径 Markdown 预览链接 |
 
 ## 工作流
 
 1. 带 `--preview` 运行脚本；缺失配置时，告知用户脚本已经创建的 `~/.gpt-image2/config.json` 路径，并提醒填写 `base_url` 与 `api_key`，不代填密钥
-2. 按需求选择生成 / 编辑模式运行脚本
+2. 按需求选择生成 / 编辑模式；若网关要求文件上传，编辑时加 `--edit-transport multipart`
 3. 校验输出文件存在且非空
 4. 使用可用的本地图片预览工具检查结果，并在回复中以绝对路径 Markdown 图片链接展示预览；不要只给出文件路径
 
@@ -110,5 +115,5 @@ cp -r gpt-image2-generator ~/.codex/skills/
 
 `scripts/generate_image.py` 主体仅使用 Python 标准库；`--composite` 需要可选依赖 Pillow（`pip install pillow`）。
 - 生成：`POST /v1/images/generations`（JSON：model / prompt / size / n / quality）
-- 编辑：`POST /v1/images/edits`（JSON：model / prompt / images[].image_url，本地文件自动转 data URL；蒙版为 images[].mask_url）
+- 编辑：`POST /v1/images/edits` 默认用 JSON（model / prompt / images[].image_url，本地文件自动转 data URL；蒙版为 images[].mask_url）；`--edit-transport multipart` 改用 `multipart/form-data` 的 `image` / `mask` 文件字段
 - base_url 自动兼容三种写法：`https://host/`、`https://host/v1`、`https://host/v1/images/generations`
